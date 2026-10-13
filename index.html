@@ -131,7 +131,7 @@ function readBase64(file) {
   });
 }
 function resultText(r, selectedKind) {
-  if (selectedKind === 'balance') return '✅ 残高スクショを受け付けました。5分ほどで管理表に入ります';
+  if (selectedKind === 'balance') return '✅ 残高スクショを受け付けました。毎朝7:20ごろ管理表に入ります。すぐ入れたい時は管理表の「反映する」を押してください';
   if (selectedKind === 'other') return '✅ その他のファイルを受け付けました\n「スクショ受け取り」フォルダに保存しました。\nAIに「データ読み取って」と伝えてください。';
   let text = '✅ 受け付けました\n端末' + r.terminal + '・' + r.month + '分・' + r.rows + '件';
   if (r.replaced) text += '\n（前に送った同じ月の分は置き換えました）';

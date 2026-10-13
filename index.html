@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>PayPay送信</title>
+<style>
+  :root { color-scheme:light dark; --bg:#f6f7f9; --card:#fff; --text:#1d2129; --sub:#5f6672; --red:#e60033; --ok:#0a7d3e; --ng:#b3261e; --line:#dde1e6; }
+  @media (prefers-color-scheme:dark) {
+    :root { --bg:#16181c; --card:#22252b; --text:#eceef1; --sub:#a4abb6; --line:#363a42; --ok:#5cd08d; --ng:#ff8a80; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding: max(16px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left)); background:var(--bg); color:var(--text); font-family:-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; max-width:480px; margin:0 auto; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .term { font-size:40px; font-weight:700; color:var(--red); margin:4px 0 2px; overflow-wrap:anywhere; }
+  .target { font-size:20px; font-weight:700; line-height:1.5; margin:0 0 16px; }
+  .sub { color:var(--sub); font-size:14px; line-height:1.6; }
+  ol { padding-left:22px; margin:0 0 16px; line-height:1.7; font-size:15px; }
+  label.pick { display:block; text-align:center; padding:16px; border:2px dashed var(--line); border-radius:12px; font-size:16px; cursor:pointer; }
+  input[type=file] { position:absolute; width:1px; height:1px; opacity:0; }
+  input[type=file]:focus-visible + #fname { outline:2px solid var(--red); }
+  #fname { margin:8px 0 16px; font-size:14px; color:var(--sub); overflow-wrap:anywhere; text-align:center; }
+  .kinds { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; }
+  button { font:inherit; cursor:pointer; touch-action:manipulation; }
+  .kinds button { min-height:54px; padding:8px 3px; font-size:13px; font-weight:700; border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--text); overflow-wrap:anywhere; }
+  .kinds button[aria-pressed=true] { background:var(--red); border-color:var(--red); color:#fff; }
+  #send { width:100%; margin-top:14px; padding:16px; font-size:18px; font-weight:700; border:0; border-radius:12px; background:var(--red); color:#fff; }
+  button:disabled { opacity:.4; cursor:default; }
+  :focus-visible { outline:3px solid var(--red); outline-offset:3px; }
+  #msg { margin-top:16px; font-size:16px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .ok { color:var(--ok); } .ng { color:var(--ng); }
+  #reload { display:block; margin:16px auto 0; padding:8px 12px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--sub); font-size:14px; }
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>PayPay送信</h1>
+  <div class="term" id="terminal">確認中…</div>
+  <p class="target" id="target">今回の対象を確認しています</p>
+  <ol>
+    <li>取引履歴CSV・残高スクショ・その他のファイルを選ぶ</li>
+    <li>ファイルの種類を確認する（ボタンで変更できます）</li>
+    <li>「送信する」を押す</li>
+  </ol>
+  <label class="pick" for="file">📄 ファイルを選ぶ</label>
+  <input type="file" id="file" aria-label="送るファイルを選ぶ">
+  <p id="fname">まだ選んでいません</p>
+  <div class="kinds" role="group" aria-label="ファイルの種類">
+    <button type="button" data-kind="csv" aria-pressed="true">PayPay CSV</button>
+    <button type="button" data-kind="balance" aria-pressed="false">残高スクショ</button>
+    <button type="button" data-kind="other" aria-pressed="false">その他</button>
+  </div>
+  <p class="sub">CSVは5MBまで。スクショ・その他は10MBまで。スクショはPNG・JPEG・WebPに対応しています。</p>
+  <button type="button" id="send" disabled>送信する</button>
+  <div id="msg" role="status" aria-live="polite"></div>
+  <button type="button" id="reload">ページを読み直す</button>
+</main>
+<script>
+// 目的: Googleアカウントの切り替えなしでGASへ送る。成果物: 公開用の静的画面。
+// 制約: 合言葉・端末一覧は埋め込まない。判断基準: 認証済み端末を表示し、通信失敗のみ再送。
+// 開始状態: uploader/Code.jsのinfo/uploadを配備したGASの公開入口を使う。
+const API = 'https://script.google.com/macros/s/AKfycbyXfyYlyMjgEEIQ7E_OogIPyRaVQwFXOOqfUHPwBjVDQHy-4ku-PNT9FUBiyelZmrTeVQ/exec';
+let storageUnavailable = false;
+const token = (function () {
+  const params = new URLSearchParams(location.hash.slice(1));
+  const fromLink = params.get('t');
+  try {
+    if (fromLink) { localStorage.setItem('paypay_t', fromLink); return fromLink; }
+    return localStorage.getItem('paypay_t') || '';
+  } catch (_) { storageUnavailable = true; return fromLink || ''; }
+})();
+const fileEl = document.getElementById('file');
+const sendEl = document.getElementById('send');
+const msgEl = document.getElementById('msg');
+const kindButtons = Array.from(document.querySelectorAll('[data-kind]'));
+let kind = 'csv', ready = false, busy = false, sent = false;
+
+function show(cls, text) { msgEl.className = cls; msgEl.textContent = text; }
+function updateControls() {
+  sendEl.disabled = !ready || busy || sent || !fileEl.files[0];
+  fileEl.disabled = busy;
+  kindButtons.forEach(button => { button.disabled = busy; button.setAttribute('aria-pressed', String(button.dataset.kind === kind)); });
+}
+function selectKind(value) { kind = value; updateControls(); }
+kindButtons.forEach(button => button.addEventListener('click', () => selectKind(button.dataset.kind)));
+fileEl.addEventListener('change', function () {
+  const f = fileEl.files[0];
+  document.getElementById('fname').textContent = f ? f.name : 'まだ選んでいません';
+  sent = false;
+  selectKind(f && (/\.csv$/i.test(f.name) || f.type === 'text/csv') ? 'csv'
+    : f && /^image\//i.test(f.type) ? 'balance' : 'other');
+  show('', '');
+});
+
+async function api_(body) {
+  if (!token) throw new Error('端末フォルダの「📤 PayPay送信ページ」にあるリンクから、一度開いてください。');
+  const payload = JSON.stringify(Object.assign({ t: token }, body));
+  let result;
+  // 最初の送信に加え、通信失敗だけ最大3回再送。同じ送信IDと本文を使う。
+  for (let attempt = 0; attempt <= 3; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000);
+    try {
+      // Content-Typeは付けない。ブラウザによるtext/plain送信で事前確認の通信を避ける。
+      const response = await fetch(API, { method: 'POST', body: payload, signal: controller.signal, credentials: 'omit' });
+      if (!response.ok) throw new Error('通信に失敗しました');
+      result = await response.json();
+      if (!result || typeof result.ok !== 'boolean') throw new Error('返事を読み取れませんでした');
+      break;
+    } catch (_) {
+      if (attempt === 3) throw new Error('通信に失敗しました。少し待ってから、もう一度お試しください。');
+      show('', '再接続中…（再送 ' + (attempt + 1) + ' / 3）');
+      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+    } finally { clearTimeout(timer); }
+  }
+  // GASの検査・認証エラーは通信の再試行に含めない。
+  if (!result.ok) throw new Error(result.error || '受け付けできませんでした。');
+  return result;
+}
+
+function readBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(new Error('ファイルを読み込めませんでした。'));
+    reader.onabort = () => reject(new Error('ファイルの読み込みを中止しました。'));
+    reader.readAsDataURL(file);
+  });
+}
+function resultText(r, selectedKind) {
+  if (selectedKind === 'balance') return '✅ 残高スクショを受け付けました。5分ほどで管理表に入ります';
+  if (selectedKind === 'other') return '✅ その他のファイルを受け付けました\n「その他」フォルダに保存しました。';
+  let text = '✅ 受け付けました\n端末' + r.terminal + '・' + r.month + '分・' + r.rows + '件';
+  if (r.replaced) text += '\n（前に送った同じ月の分は置き換えました）';
+  if (r.warning) text += '\n⚠️ ' + r.warning;
+  text += r.received == null ? '\n\n（届いた台数は確認できませんでした。受付は完了しています）'
+    : '\n\n届いた台数：' + r.received + ' / ' + r.total + '台';
+  return text;
+}
+sendEl.addEventListener('click', async function () {
+  const f = fileEl.files[0];
+  if (!f || busy || !ready || sent) return;
+  const selectedKind = kind;
+  const limit = (kind === 'csv' ? 5 : 10) * 1024 * 1024;
+  if (!f.size || f.size > limit) { show('ng', '❌ ファイルが空か、大きすぎます（' + (kind === 'csv' ? 5 : 10) + 'MBまで）。'); return; }
+  busy = true; updateControls(); show('', '送信中です…');
+  try {
+    const inferred = /\.png$/i.test(f.name) ? 'image/png' : /\.jpe?g$/i.test(f.name) ? 'image/jpeg' : /\.webp$/i.test(f.name) ? 'image/webp' : 'application/octet-stream';
+    const requestId = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
+    const response = await api_({ action: 'upload', kind: selectedKind, filename: f.name, mime: f.type || inferred, b64: await readBase64(f), requestId: requestId });
+    sent = true;
+    show('ok', resultText(response.result, selectedKind));
+  } catch (e) { show('ng', '❌ 受け付けできませんでした\n' + e.message); }
+  finally { busy = false; updateControls(); }
+});
+document.getElementById('reload').addEventListener('click', () => { if (!busy) location.reload(); });
+window.addEventListener('hashchange', () => location.reload());
+async function initialize() {
+  try {
+    const info = await api_({ action: 'info' });
+    document.getElementById('terminal').textContent = '端末 ' + info.terminal;
+    document.getElementById('target').textContent = '今回の対象：' + info.targetLabel + '分';
+    ready = true;
+    show('', storageUnavailable ? 'このブラウザでは合言葉を保存できません。次回も端末フォルダのリンクから開いてください。' : '');
+  } catch (e) {
+    document.getElementById('terminal').textContent = '端末を確認できません';
+    document.getElementById('target').textContent = 'ページを読み直すか、端末フォルダのリンクから開いてください';
+    show('ng', e.message);
+  }
+  updateControls();
+}
+initialize();
+</script>
+</body>
+</html>
